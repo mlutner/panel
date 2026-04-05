@@ -110,7 +110,9 @@ TASK_KEYWORDS = {
                 "self-assess", "how are you doing", "what are you", "tell me about yourself",
                 "where are you weak", "where do you struggle", "critique yourself"],
     "research": ["search", "find", "look up", "what is", "who is", "compare",
-                 "research", "investigate", "how does", "tell me about"],
+                 "research", "investigate", "how does", "tell me about",
+                 "how to", "how can", "how do", "what are the", "what would",
+                 "can you review", "can you check", "strengthen", "improve"],
     "create": ["draft a", "write a", "compose", "design a", "build a", "generate",
                "create a", "make a", "sketch", "outline a"],
     "execute": ["capture", "save", "add to", "log", "record", "remind me",
@@ -295,9 +297,10 @@ def generate_persona(features: TaskFeatures) -> PersonaConfig:
 
     # Anti-sycophancy: if agent has agreed too many times, force challenger
     if features.consecutive_agreements >= 3:
-        weights[2] += 0.5  # challenger
-        weights[0] -= 0.3  # supportive
-        reasoning.append(f"Anti-sycophancy: {features.consecutive_agreements} consecutive agreements, forced challenger boost +0.5")
+        boost = min(0.9, 0.5 + (features.consecutive_agreements - 3) * 0.1)  # escalates with streak length
+        weights[2] += boost   # challenger
+        weights[0] -= 0.5     # suppress supportive harder
+        reasoning.append(f"Anti-sycophancy: {features.consecutive_agreements} consecutive agreements, forced challenger boost +{boost:.1f}")
 
     # Complexity: boost analytical for complex tasks
     if features.has_multiple_asks or features.word_count > 50:
