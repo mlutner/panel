@@ -62,6 +62,7 @@ class TaskFeatures:
     validation_seeking: float = 0.0  # 0=not seeking, 1=strongly seeking validation
     uncertainty: float = 0.0         # 0=certain, 1=very uncertain
     frustration: float = 0.0         # 0=calm, 1=very frustrated
+    scope_creep: float = 0.0        # 0=focused, 1=expanding scope without mandate
 
     # Complexity
     has_multiple_asks: bool = False
@@ -96,28 +97,45 @@ FRUSTRATION_MARKERS = [
 ]
 
 TASK_KEYWORDS = {
-    "decide": ["should i", "should we", "which", "evaluate", "choose", "prioritize",
+    # ORDER = priority. First match wins. Most specific first.
+    "decide": ["should i", "should we", "which one", "evaluate", "choose", "prioritize",
                "trade-off", "pros and cons", "worth it", "better option",
                "what do you think", "i've decided", "shut down", "pivot", "kill",
-               "focus on", "whether to", "help me think", "torn between"],
+               "focus on", "whether to", "help me think", "torn between",
+               "do we need", "is it worth", "keep or", "add this to",
+               "think about adding", "but think about", "also what about"],
     "communicate": ["email", "message to", "reply to", "pitch", "present to",
                     "draft an email", "draft a message", "write to", "follow up with"],
     "debug": ["fix", "broken", "error", "not working", "why does", "bug",
-              "troubleshoot", "failing", "crash", "still not", "keeps breaking"],
-    "reflect": ["review", "retro", "what went", "improve", "learn from",
+              "troubleshoot", "failing", "crash", "still not", "keeps breaking",
+              "check for drift", "is it working"],
+    "reflect": ["review", "retro", "what went", "learn from",
                 "feedback on", "how did", "assess", "grade my", "be honest",
                 "your personality", "your weaknesses", "your strengths",
                 "self-assess", "how are you doing", "what are you", "tell me about yourself",
-                "where are you weak", "where do you struggle", "critique yourself"],
+                "where are you weak", "where do you struggle", "critique yourself",
+                "give me an assessment", "rate ", "can you review"],
     "research": ["search", "find", "look up", "what is", "who is", "compare",
                  "research", "investigate", "how does", "tell me about",
                  "how to", "how can", "how do", "what are the", "what would",
-                 "can you review", "can you check", "strengthen", "improve"],
+                 "can you check", "strengthen", "what version",
+                 "can we add", "what about the"],
     "create": ["draft a", "write a", "compose", "design a", "build a", "generate",
-               "create a", "make a", "sketch", "outline a"],
+               "create a", "make a", "sketch", "outline a", "implement", "wire",
+               "build into", "build pr", "create this as"],
     "execute": ["capture", "save", "add to", "log", "record", "remind me",
-                "buy", "schedule", "book", "todo"],
+                "buy", "schedule", "book", "todo", "approve", "ok done",
+                "yes", "do it", "go ahead", "perfect", "great", "thanks",
+                "enable it", "restart", "update it", "let's do it"],
 }
+
+# Scope creep markers — when an agent is building without a clear mandate
+SCOPE_CREEP_MARKERS = [
+    "also", "while we're at it", "might as well", "let me also",
+    "i could also", "another thing", "one more", "plus we could",
+    "i went ahead and", "i also built", "i added", "i created",
+    "build pr", "push to github", "add this to", "create a repo",
+]
 
 
 def extract_features(text: str, session_history: list = None) -> TaskFeatures:
@@ -144,6 +162,7 @@ def extract_features(text: str, session_history: list = None) -> TaskFeatures:
         return min(1.0, hits / max(1, len(markers) * 0.15))  # saturates at ~15% match rate
 
     validation = _score(VALIDATION_MARKERS)
+    scope_creep = _score(SCOPE_CREEP_MARKERS)
     uncertainty = _score(UNCERTAINTY_MARKERS)
     frustration = _score(FRUSTRATION_MARKERS)
 
@@ -169,6 +188,7 @@ def extract_features(text: str, session_history: list = None) -> TaskFeatures:
         validation_seeking=validation,
         uncertainty=uncertainty,
         frustration=frustration,
+        scope_creep=scope_creep,
         has_multiple_asks=has_multiple,
         references_prior_context=has_prior,
         consecutive_agreements=consecutive_agrees,
@@ -238,6 +258,14 @@ ANTI_SYCOPHANCY_INJECTION = (
     "If you're not sure, say so."
 )
 
+SCOPE_CREEP_INJECTION = (
+    " SCOPE CHECK: This looks like expanding scope or building something new. "
+    "Before proceeding, answer: (1) Who specifically asked for this? "
+    "(2) Does this serve the current task or is it a tangent? "
+    "(3) What gets delayed if you build this? "
+    "If nobody asked for it and it delays current work, flag it instead of building it."
+)
+
 # Response format mapping
 FORMAT_MAP = {
     "supportive": "action",
@@ -302,6 +330,12 @@ def generate_persona(features: TaskFeatures) -> PersonaConfig:
         weights[0] -= 0.5     # suppress supportive harder
         reasoning.append(f"Anti-sycophancy: {features.consecutive_agreements} consecutive agreements, forced challenger boost +{boost:.1f}")
 
+    # Scope creep: boost challenger when agent is building without mandate
+    if features.scope_creep > 0.3:
+        weights[2] += 0.5 * features.scope_creep   # challenger
+        weights[0] -= 0.3 * features.scope_creep   # suppress supportive
+        reasoning.append(f"Scope creep ({features.scope_creep:.2f}): boosted challenger +{0.5*features.scope_creep:.2f}")
+
     # Complexity: boost analytical for complex tasks
     if features.has_multiple_asks or features.word_count > 50:
         weights[1] += 0.15  # analytical
@@ -364,9 +398,14 @@ def generate_persona(features: TaskFeatures) -> PersonaConfig:
         )
         reasoning.append(f"Added anti-sycophancy injection ({features.consecutive_agreements} consecutive agreements)")
 
+    # Add scope creep injection
+    if features.scope_creep > 0.3:
+        prompt_parts.append(SCOPE_CREEP_INJECTION)
+        reasoning.append(f"Added scope creep injection ({features.scope_creep:.2f})")
+
     # Pushback level — continuous, not categorical
     pushback = weights[2]  # challenger weight = pushback level
-    pushback = round(min(1.0, pushback + (0.2 if features.validation_seeking > 0.3 else 0)), 3)
+    pushback = round(min(1.0, pushback + (0.2 if features.validation_seeking > 0.3 else 0) + (0.15 if features.scope_creep > 0.3 else 0)), 3)
 
     # Input hash for reproducibility
     import hashlib
