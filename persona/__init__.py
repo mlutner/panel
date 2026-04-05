@@ -1,23 +1,18 @@
 """
-Persona — Dynamic personality adaptation layer for AI agents.
+Persona — Algorithmic personality adaptation layer for AI agents.
 
 Three components:
-  1. Sensor: classifies the task/environment to determine what's needed
-  2. Stance: selects and configures the reasoning posture
-  3. Monitor: detects convergence/groupthink in multi-agent settings
+  1. Factory: deterministic persona generation (text → features → config)
+     No LLM calls. Same inputs → same output. A/B testable.
+  2. Monitor: convergence/groupthink detection for multi-agent systems
+  3. Sensor/Stance: legacy interface (kept for compatibility, factory is preferred)
 
-Usage:
-    from persona import sense, adapt, monitor_convergence
+Primary interface:
+    from persona import create_persona, monitor_convergence
 
-    # Single agent: sense task, get adapted config
-    stance = sense("Draft an email to a prospect who ghosted us")
-    # → returns: {stance: "challenger", temperature: 0.7, pushback_level: "high", ...}
-
-    # Multi-agent: monitor outputs for groupthink
-    drift = monitor_convergence(agent_outputs)
-    # → returns: {converging: True, diversity_score: 0.3, recommendation: "inject_dissent"}
+    config = create_persona("Should I pivot this product?", session_history=["supportive", "supportive"])
+    # → PersonaConfig(stance="challenger", temperature=0.6, pushback_level=0.64, ...)
 """
 
-from .sensor import sense, classify_task
-from .stance import adapt, STANCES
-from .monitor import monitor_convergence
+from .factory import create_persona, extract_features, generate_persona, PersonaConfig, TaskFeatures, format_persona
+from .monitor import monitor_convergence, format_monitor
